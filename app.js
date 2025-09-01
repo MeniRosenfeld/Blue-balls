@@ -110,6 +110,7 @@ function buildDisplaySequenceHTML(raw) {
 function render(groups) {
     const resultsEl = document.getElementById('results');
     const summaryEl = document.getElementById('summary');
+    const statsEl = document.getElementById('stats');
     const iconMode = document.getElementById('iconToggle') && document.getElementById('iconToggle').checked !== false;
 
     const totalProb = groups.reduce((s, g) => s + g.prob, 0);
@@ -154,6 +155,43 @@ function render(groups) {
 
         summaryEl.textContent = `Max theoretical blue: ${maxBlue}, Max blue shown: ${maxBlueShown}, Total probability: ${formatProbability(totalProb)}`;
     })();
+
+    // Compute distribution stats over currently shown groups
+    const pmf = groups.map(g => ({ k: g.blue, p: g.prob }));
+    const totalP = pmf.reduce((s, x) => s + x.p, 0) || 1;
+    const mean = pmf.reduce((s, x) => s + x.k * x.p, 0) / totalP;
+    const variance = pmf.reduce((s, x) => s + Math.pow(x.k - mean, 2) * x.p, 0) / totalP;
+    const stddev = Math.sqrt(Math.max(0, variance));
+    // Median: smallest m such that CDF >= 0.5; if CDF equals 0.5 at m, also report next value
+    let cdf = 0, medianLow = null, medianHigh = null;
+    for (const x of pmf.sort((a, b) => a.k - b.k)) {
+        const prev = cdf;
+        cdf += x.p / totalP;
+        if (medianLow === null && cdf >= 0.5) {
+            if (prev < 0.5 && cdf > 0.5) {
+                medianLow = x.k; medianHigh = null;
+            } else if (cdf === 0.5) {
+                medianLow = x.k;
+                const next = pmf.find(y => y.k > x.k);
+                medianHigh = next ? next.k : x.k;
+            }
+        }
+    }
+    if (medianLow === null && pmf.length) medianLow = pmf[pmf.length - 1].k;
+    // Modes: all k with highest probability
+    let modeP = -1;
+    for (const x of pmf) { if (x.p > modeP) { modeP = x.p; } }
+    const eps = 1e-12;
+    const modes = pmf.filter(x => Math.abs(x.p - modeP) < eps).map(x => x.k).sort((a, b) => a - b);
+
+    const medianText = (medianHigh === null ? String(medianLow) : `${medianLow}, ${medianHigh}`);
+    const modesText = modes.join(', ');
+    statsEl.innerHTML = `
+        <div class=\"stat\">Average: <strong>${mean.toFixed(3)}</strong></div>
+        <div class=\"stat\">Std dev: <strong>${stddev.toFixed(3)}</strong></div>
+        <div class=\"stat\">Median: <strong>${medianText}</strong></div>
+        <div class=\"stat\">Mode: <strong>${modesText}</strong></div>
+    `;
 
     resultsEl.innerHTML = '';
 
@@ -222,7 +260,8 @@ function render(groups) {
             const firstSeq = g.sequences[0] || '';
             const randomOnly = firstSeq.replace(/[YBL]/g, '');
             const totalRandomFlips = randomOnly.length;
-            const n = totalRandomFlips; // no forced-last-yellow under arbitrary patterns
+            const lastChar = firstSeq[firstSeq.length - 1] || '';
+            const n = totalRandomFlips - (lastChar === 'y' ? 1 : 0);
             const k = g.blue;
             const combos = nCk(n, k);
             const yCountInFirst = (randomOnly.match(/y/g) || []).length;
