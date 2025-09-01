@@ -1,10 +1,13 @@
 // Agahnim blue-ball enumerator
 
-function enumerateSequences({ hitsToWin, guaranteedPerCycle, randomPerCycle, pY, maxRandomCap }) {
-    // Depth-first expansion by cycles with strict pruning on blue-count and total random flips used.
+function enumerateSequences({ hitsToWin, cyclePattern, pY, maxRandomCap }) {
+    // Parse cycle pattern (case-insensitive). Supported tokens: Y (guaranteed yellow), B (guaranteed blue), ? (random), L (visual lightning only).
     const H = hitsToWin;
-    const G = guaranteedPerCycle;
-    const R = randomPerCycle;
+    const pattern = (cyclePattern || '').toUpperCase();
+    if (!/^[YB?L]*$/i.test(pattern)) {
+        throw new Error('Invalid cycle pattern. Use only Y, B, ?, L');
+    }
+    const tokens = pattern.split('');
     const Ncap = Number.isFinite(maxRandomCap) ? Math.max(0, Math.floor(maxRandomCap)) : Infinity;
 
     const resultsByBlue = new Map(); // blueCount -> { sequences: string[], prob: number }
@@ -19,56 +22,34 @@ function enumerateSequences({ hitsToWin, guaranteedPerCycle, randomPerCycle, pY,
     function dfs(state) {
         let { hits, blues, seq, prob, usedRandom } = state;
 
-        // Start of cycle: apply guaranteed Y
-        if (G > 0 && hits < H) {
-            const need = H - hits;
-            const adds = Math.min(G, need);
-            hits += adds;
-            seq += 'Y'.repeat(adds);
-        }
+        if (hits >= H) { addResult(blues, seq, prob); return; }
 
-        if (hits >= H) {
-            addResult(blues, seq, prob);
-            return;
-        }
+        // If neither Y nor ? exist in pattern, hits can never increase
+        const hasY = tokens.includes('Y');
+        const hasQ = tokens.includes('?');
+        if (!hasY && !hasQ) return;
 
-        // If we cannot use more random flips, and guarantees didn't already finish, we must stop
-        if (usedRandom >= Ncap) return;
-
-        // Branch over random trials in this cycle
-        function branch(trialIndex, hitsNow, bluesNow, seqNow, probNow, usedNow) {
-            if (hitsNow >= H) {
-                addResult(bluesNow, seqNow, probNow);
-                return;
+        function walk(pos, hitsNow, bluesNow, seqNow, probNow, usedNow) {
+            if (hitsNow >= H) { addResult(bluesNow, seqNow, probNow); return; }
+            const t = tokens[pos];
+            const nextPos = tokens.length === 0 ? 0 : (pos + 1) % tokens.length;
+            if (t === 'Y') {
+                walk(nextPos, hitsNow + 1, bluesNow, seqNow + 'Y', probNow, usedNow);
+            } else if (t === 'B') {
+                walk(nextPos, hitsNow, bluesNow + 1, seqNow + 'B', probNow, usedNow);
+            } else if (t === '?') {
+                if (usedNow >= Ncap) return;
+                walk(nextPos, hitsNow + 1, bluesNow, seqNow + 'y', probNow * pY, usedNow + 1);
+                walk(nextPos, hitsNow, bluesNow + 1, seqNow + 'b', probNow * (1 - pY), usedNow + 1);
+            } else if (t === 'L') {
+                // Visual only
+                walk(nextPos, hitsNow, bluesNow, seqNow + 'L', probNow, usedNow);
+            } else {
+                walk(nextPos, hitsNow, bluesNow, seqNow, probNow, usedNow);
             }
-            if (trialIndex >= R) {
-                // End of cycle → next cycle
-                dfs({ hits: hitsNow, blues: bluesNow, seq: seqNow + 'L', prob: probNow, usedRandom: usedNow });
-                return;
-            }
-            if (usedNow >= Ncap) return; // must consume exactly R flips per cycle; cannot proceed
-
-            // y
-            branch(
-                trialIndex + 1,
-                hitsNow + 1,
-                bluesNow,
-                seqNow + 'y',
-                probNow * pY,
-                usedNow + 1
-            );
-            // b
-            branch(
-                trialIndex + 1,
-                hitsNow,
-                bluesNow + 1,
-                seqNow + 'b',
-                probNow * (1 - pY),
-                usedNow + 1
-            );
         }
 
-        branch(0, hits, blues, seq, prob, usedRandom);
+        walk(0, hits, blues, seq, prob, usedRandom);
     }
 
     dfs({ hits: 0, blues: 0, seq: '', prob: 1, usedRandom: 0 });
@@ -111,6 +92,8 @@ function buildDisplaySequenceHTML(raw) {
             html += '<span class="token token-yellow" title="Random yellow ball"></span>';
         } else if (ch === 'b') {
             html += '<span class="token token-blue" title="Blue balls"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>';
+        } else if (ch === 'B') {
+            html += '<span class="token token-blue token-blue-guaranteed" title="Guaranteed blue balls"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>';
         } else if (ch === 'L') {
             html += '<span class="token token-lightning" title="Lightning">\
 <svg class="bolt-icon" viewBox="0 0 12 16" aria-hidden="true" focusable="false">\
@@ -139,10 +122,37 @@ function render(groups) {
     // so no random flips occur in cycle C. Therefore, max blues = (C - 1) * R.
     (function updateMaxTheoretical() {
         const H = Number(document.getElementById('hitsToWin').value);
-        const G = Number(document.getElementById('guaranteedPerCycle').value);
-        const R = Number(document.getElementById('randomPerCycle').value);
-        const theoreticalMax = (G === 0) ? '∞' : Math.max(0, (Math.ceil(H / G) - 1) * R);
-        summaryEl.textContent = `Groups: ${groups.length}, Random flips cap: ${ncap}, Max blue shown: ${maxBlueShown}, Max theoretical blue: ${theoreticalMax}, Total probability: ${formatProbability(totalProb)}`;
+        const patt = String(document.getElementById('cyclePattern').value || '').toUpperCase();
+        const core = patt; // whole string is the repeating cycle; L is visual only
+        if (!core.length) { summaryEl.textContent = `Groups: ${groups.length}, Random flips cap: ${ncap}, Max blue shown: ${maxBlueShown}, Max theoretical blue: 0, Total probability: ${formatProbability(totalProb)}`; return; }
+
+        let cumY = [0], cumBlueCap = [0];
+        for (let i = 0; i < core.length; i++) {
+            const ch = core[i];
+            cumY[i + 1] = cumY[i] + (ch === 'Y' ? 1 : 0);
+            cumBlueCap[i + 1] = cumBlueCap[i] + ((ch === '?' || ch === 'B') ? 1 : 0);
+        }
+        const Gper = cumY[core.length];
+        const BcapPer = cumBlueCap[core.length];
+
+        if (Gper === 0) {
+            summaryEl.textContent = `Max theoretical blue: ∞, Max blue shown: ${maxBlueShown}, Total probability: ${formatProbability(totalProb)}`;
+            return;
+        }
+
+        let C = Math.ceil(H / Gper);
+        let maxBlue = 0;
+        while (true) {
+            const baseY = (C - 1) * Gper;
+            const needY = H - baseY;
+            if (needY <= 0) { maxBlue = (C - 1) * BcapPer; break; }
+            let j = 0;
+            while (j <= core.length && cumY[j] < needY) j++;
+            if (j <= core.length) { maxBlue = (C - 1) * BcapPer + cumBlueCap[j]; break; }
+            C++;
+        }
+
+        summaryEl.textContent = `Max theoretical blue: ${maxBlue}, Max blue shown: ${maxBlueShown}, Total probability: ${formatProbability(totalProb)}`;
     })();
 
     resultsEl.innerHTML = '';
@@ -210,10 +220,9 @@ function render(groups) {
             groupEl.appendChild(header);
 
             const firstSeq = g.sequences[0] || '';
-            const lastChar = firstSeq[firstSeq.length - 1] || '';
-            const randomOnly = firstSeq.replace(/[YL]/g, '');
+            const randomOnly = firstSeq.replace(/[YBL]/g, '');
             const totalRandomFlips = randomOnly.length;
-            const n = totalRandomFlips - (lastChar === 'y' ? 1 : 0);
+            const n = totalRandomFlips; // no forced-last-yellow under arbitrary patterns
             const k = g.blue;
             const combos = nCk(n, k);
             const yCountInFirst = (randomOnly.match(/y/g) || []).length;
@@ -260,8 +269,7 @@ function render(groups) {
 function getInputs() {
     return {
         hitsToWin: Number(document.getElementById('hitsToWin').value),
-        guaranteedPerCycle: Number(document.getElementById('guaranteedPerCycle').value),
-        randomPerCycle: Number(document.getElementById('randomPerCycle').value),
+        cyclePattern: String(document.getElementById('cyclePattern').value || 'Y???L'),
         pY: Number(document.getElementById('pY').value),
         maxRandomCap: Number(document.getElementById('maxRandomCap').value),
     };
@@ -274,18 +282,19 @@ function computeAndRender() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('computeBtn').addEventListener('click', computeAndRender);
     document.getElementById('exampleBtn').addEventListener('click', () => {
         document.getElementById('hitsToWin').value = 6;
-        document.getElementById('guaranteedPerCycle').value = 1;
-        document.getElementById('randomPerCycle').value = 3;
+        document.getElementById('cyclePattern').value = 'Y???L';
         document.getElementById('pY').value = 0.5;
-        document.getElementById('maxRandomCap').value = 20;
+        document.getElementById('maxRandomCap').value = 16;
         computeAndRender();
     });
     const toggle = document.getElementById('iconToggle');
     if (toggle) toggle.addEventListener('change', computeAndRender);
+    document.getElementById('cyclePattern').addEventListener('input', computeAndRender);
     document.getElementById('maxRandomCap').addEventListener('input', computeAndRender);
+    document.getElementById('hitsToWin').addEventListener('input', computeAndRender);
+    document.getElementById('pY').addEventListener('input', computeAndRender);
     computeAndRender();
 });
 

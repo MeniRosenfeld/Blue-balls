@@ -10,7 +10,7 @@
 
 <body>
     <header>
-        <h1>Agahnim "Blue Balls" Sequences</h1>
+        <h1>The Legend of Zelda: A Link to the Past - Agahnim "Blue Balls" Sequences</h1>
         <p>Enumerate all ordered sequences that yield each blue-ball count, with probabilities.</p>
     </header>
 
@@ -21,15 +21,11 @@
                 <input id="hitsToWin" type="number" min="1" value="6">
             </label>
             <label>
-                Guaranteed yellow balls per cycle (Y)
-                <input id="guaranteedPerCycle" type="number" min="0" value="1">
+                Cycle pattern (?/Y/B/L)
+                <input id="cyclePattern" type="text" value="Y???L" spellcheck="false">
             </label>
             <label>
-                Random trials per cycle (y/b)
-                <input id="randomPerCycle" type="number" min="0" value="3">
-            </label>
-            <label>
-                P(yellow ball)
+                Probability of yellow ball
                 <input id="pY" type="number" step="0.01" min="0" max="1" value="0.5">
             </label>
             <label>
@@ -38,8 +34,7 @@
             </label>
         </div>
         <div class="actions">
-            <button id="computeBtn">Compute</button>
-            <button id="exampleBtn">Example (default ALttP)</button>
+            <button id="exampleBtn">Vanilla ALttP parameters</button>
             <label class="toggle-view">
                 <input id="iconToggle" type="checkbox" checked>
                 <span>Graphical view</span>
@@ -54,7 +49,8 @@
     <script src="app.js"></script>
     <footer>
         <p>
-            Key: Y = guaranteed yellow ball, y = random yellow ball, b = blue ball, L = lightning separator.
+            Key: Y = guaranteed yellow ball, y = random yellow ball, B = guaranteed blue ball, b = blue ball, L =
+            lightning separator.
         </p>
     </footer>
 </body>
