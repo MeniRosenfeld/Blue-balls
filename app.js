@@ -1,92 +1,82 @@
 // Agahnim blue-ball enumerator
 
-function enumerateSequences({ hitsToWin, guaranteedPerCycle, randomPerCycle, pY }) {
-    // Each cycle: 'Y' repeated guaranteedPerCycle, then randomPerCycle Bernoulli trials producing 'y' (success) or 'b' (blue)
-    // Lightning 'L' is placed after every cycle end for readability; last cycle includes it in display but does not affect prob.
+function enumerateSequences({ hitsToWin, guaranteedPerCycle, randomPerCycle, pY, maxRandomCap }) {
+    // Depth-first expansion by cycles with strict pruning on blue-count and total random flips used.
+    const H = hitsToWin;
+    const G = guaranteedPerCycle;
+    const R = randomPerCycle;
+    const Ncap = Number.isFinite(maxRandomCap) ? Math.max(0, Math.floor(maxRandomCap)) : Infinity;
 
     const resultsByBlue = new Map(); // blueCount -> { sequences: string[], prob: number }
 
-    function addResult(blueCount, sequence, probability) {
-        if (!resultsByBlue.has(blueCount)) {
-            resultsByBlue.set(blueCount, { sequences: [], prob: 0 });
-        }
-        const entry = resultsByBlue.get(blueCount);
-        entry.sequences.push(sequence);
-        entry.prob += probability;
+    function addResult(k, seq, prob) {
+        if (!resultsByBlue.has(k)) resultsByBlue.set(k, { sequences: [], prob: 0 });
+        const g = resultsByBlue.get(k);
+        g.sequences.push(seq);
+        g.prob += prob;
     }
 
-    // DFS over cycles until we reach hitsToWin reflectable hits
     function dfs(state) {
-        const { hits, blues, seq, prob } = state;
-        if (hits >= hitsToWin) {
-            // Finished: do not append trailing 'L'
+        let { hits, blues, seq, prob, usedRandom } = state;
+
+        // Start of cycle: apply guaranteed Y
+        if (G > 0 && hits < H) {
+            const need = H - hits;
+            const adds = Math.min(G, need);
+            hits += adds;
+            seq += 'Y'.repeat(adds);
+        }
+
+        if (hits >= H) {
             addResult(blues, seq, prob);
             return;
         }
 
-        // Begin a new cycle
-        let cycleSeq = seq;
-        let cycleHits = hits;
-        let cycleProb = prob;
+        // If we cannot use more random flips, and guarantees didn't already finish, we must stop
+        if (usedRandom >= Ncap) return;
 
-        // Deterministic guaranteed reflectables
-        const guaranteedAdds = Math.min(guaranteedPerCycle, Math.max(0, hitsToWin - cycleHits));
-        cycleHits += guaranteedAdds;
-        cycleSeq += 'Y'.repeat(guaranteedAdds);
-        // If we already finished within guaranteed
-        if (cycleHits >= hitsToWin) {
-            // Finished within guaranteed hits; no trailing 'L'
-            addResult(blues, cycleSeq, cycleProb);
-            return;
-        }
-
-        // Now branch over randomPerCycle Bernoulli trials in order (y/b)
-        function branchRandomTrials(trialIndex, accHits, accBlues, accSeq, accProb) {
-            if (accHits >= hitsToWin) {
-                // Finished during random trials; no trailing 'L'
-                addResult(accBlues, accSeq, accProb);
+        // Branch over random trials in this cycle
+        function branch(trialIndex, hitsNow, bluesNow, seqNow, probNow, usedNow) {
+            if (hitsNow >= H) {
+                addResult(bluesNow, seqNow, probNow);
                 return;
             }
-            if (trialIndex >= randomPerCycle) {
-                // End of cycle; add lightning separator and continue to next cycle
-                dfs({ hits: accHits, blues: accBlues, seq: accSeq + 'L', prob: accProb });
+            if (trialIndex >= R) {
+                // End of cycle → next cycle
+                dfs({ hits: hitsNow, blues: bluesNow, seq: seqNow + 'L', prob: probNow, usedRandom: usedNow });
                 return;
             }
+            if (usedNow >= Ncap) return; // must consume exactly R flips per cycle; cannot proceed
 
-            // y: reflectable success
-            branchRandomTrials(
+            // y
+            branch(
                 trialIndex + 1,
-                accHits + 1,
-                accBlues,
-                accSeq + 'y',
-                accProb * pY
+                hitsNow + 1,
+                bluesNow,
+                seqNow + 'y',
+                probNow * pY,
+                usedNow + 1
             );
-
-            // b: blue ball
-            branchRandomTrials(
+            // b
+            branch(
                 trialIndex + 1,
-                accHits,
-                accBlues + 1,
-                accSeq + 'b',
-                accProb * (1 - pY)
+                hitsNow,
+                bluesNow + 1,
+                seqNow + 'b',
+                probNow * (1 - pY),
+                usedNow + 1
             );
         }
 
-        branchRandomTrials(0, cycleHits, blues, cycleSeq, cycleProb);
+        branch(0, hits, blues, seq, prob, usedRandom);
     }
 
-    dfs({ hits: 0, blues: 0, seq: '', prob: 1 });
+    dfs({ hits: 0, blues: 0, seq: '', prob: 1, usedRandom: 0 });
 
-    // Convert to sorted array
     const groups = Array.from(resultsByBlue.entries())
         .map(([blue, { sequences, prob }]) => ({ blue: Number(blue), sequences, prob }))
         .sort((a, b) => a.blue - b.blue);
-
-    // Sort sequences in each group for stable output
-    for (const g of groups) {
-        g.sequences.sort();
-    }
-
+    for (const g of groups) g.sequences.sort();
     return groups;
 }
 
@@ -140,8 +130,20 @@ function render(groups) {
     const iconMode = document.getElementById('iconToggle') && document.getElementById('iconToggle').checked !== false;
 
     const totalProb = groups.reduce((s, g) => s + g.prob, 0);
-    const maxBlue = groups.length ? groups[groups.length - 1].blue : 0;
-    summaryEl.textContent = `Groups: ${groups.length}, Max blue balls: ${maxBlue}, Total probability: ${formatProbability(totalProb)}`;
+    const ncap = Number(document.getElementById('maxRandomCap').value);
+    const maxBlueShown = groups.length ? groups[groups.length - 1].blue : 0;
+
+    // Theoretical maximum blue balls (ignoring random-cap):
+    // If G == 0 → unbounded (∞). If G > 0 → the fight must finish at or before cycle C = ceil(H/G).
+    // To maximize blues, make all random flips blue and finish via guarantees at the start of cycle C,
+    // so no random flips occur in cycle C. Therefore, max blues = (C - 1) * R.
+    (function updateMaxTheoretical() {
+        const H = Number(document.getElementById('hitsToWin').value);
+        const G = Number(document.getElementById('guaranteedPerCycle').value);
+        const R = Number(document.getElementById('randomPerCycle').value);
+        const theoreticalMax = (G === 0) ? '∞' : Math.max(0, (Math.ceil(H / G) - 1) * R);
+        summaryEl.textContent = `Groups: ${groups.length}, Random flips cap: ${ncap}, Max blue shown: ${maxBlueShown}, Max theoretical blue: ${theoreticalMax}, Total probability: ${formatProbability(totalProb)}`;
+    })();
 
     resultsEl.innerHTML = '';
 
@@ -261,6 +263,7 @@ function getInputs() {
         guaranteedPerCycle: Number(document.getElementById('guaranteedPerCycle').value),
         randomPerCycle: Number(document.getElementById('randomPerCycle').value),
         pY: Number(document.getElementById('pY').value),
+        maxRandomCap: Number(document.getElementById('maxRandomCap').value),
     };
 }
 
@@ -277,10 +280,12 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('guaranteedPerCycle').value = 1;
         document.getElementById('randomPerCycle').value = 3;
         document.getElementById('pY').value = 0.5;
+        document.getElementById('maxRandomCap').value = 20;
         computeAndRender();
     });
     const toggle = document.getElementById('iconToggle');
     if (toggle) toggle.addEventListener('change', computeAndRender);
+    document.getElementById('maxRandomCap').addEventListener('input', computeAndRender);
     computeAndRender();
 });
 
